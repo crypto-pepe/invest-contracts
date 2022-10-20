@@ -1,0 +1,303 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let SEPARATOR = "__"
+let PERCENT_FACTOR = 1000000000000.toBigInt()
+let ZERO_BIGINT = 0.toBigInt()
+let ONE_BIGINT = 1.toBigInt()
+let TOKEN_NAME = "Staked WAVES"
+let TOKEN_DESCRIPTION = "Staked WAVES token"
+let TOKEN_DECIMALS = 8
+
+func getLeaseNode() = {
+    match getString("LEASE_NODE") {
+        case a:String => Address(fromBase58String(a))
+        case _ => throw("getLeaseNode: no lease node address")
+    }
+}
+
+func loadInt(key_: String, default_: Int) = {
+    match getInteger(key_) {
+        case a:Int => a
+        case _ => default_
+    }
+}
+
+func loadBigInt(key_: String, default_: BigInt) = {
+    match getBinary(key_) {
+        case a:ByteVector => a.toBigInt()
+        case _ => default_
+    }
+}
+
+func loadAsset() = {
+    match getString("ASSET") {
+        case a:String => fromBase58String(a)
+        case _ => base58''
+    }
+}
+
+func _updateLeasing(amount_: Int) = {
+    let leaseId = getBinary("LEASE_ID")
+    let leaseAmount = loadInt("LEASE_AMOUNT", 0)
+    let newLeaseAmount = leaseAmount + amount_
+
+    let unleaseOrEmpty =
+        if leaseId.isDefined() then
+            [LeaseCancel(leaseId.value())]
+        else []
+
+    let leaseActions =
+        if newLeaseAmount > 0 then
+            let lease = Lease(getLeaseNode(), newLeaseAmount)
+            [
+                lease,
+                BinaryEntry("LEASE_ID", calculateLeaseId(lease)),
+                IntegerEntry("LEASE_AMOUNT", newLeaseAmount)
+            ]
+        else
+            [
+                DeleteEntry("LEASE_ID"),
+                IntegerEntry("LEASE_AMOUNT", 0)
+            ]
+
+    unleaseOrEmpty ++ leaseActions
+}
+
+@Callable(i)
+func init(multisig: String, leaseNode: String) = {
+    let asset = loadAsset()
+
+    strict err =
+        if asset != base58'' then
+            throw("init: already initialized")
+        else if leaseNode == "" then
+            throw("init: invalid lease node")
+        else if multisig == "" || fromBase58String(multisig).size() != 32 then
+            throw("init: invalid multisig public key")
+        else unit
+
+    let issue = Issue(TOKEN_NAME, TOKEN_DESCRIPTION, 0, TOKEN_DECIMALS, true)
+    let assetId = calculateAssetId(issue)
+
+    (
+        [
+            StringEntry("MULTISIG", multisig),
+            StringEntry("LEASE_NODE", leaseNode),
+            StringEntry("ASSET", toBase58String(assetId)),
+            issue
+        ], unit
+    )
+}
+
+@Callable(i)
+func updateNode(leaseNode: String) = {
+    let leaseId = getBinary("LEASE_ID")
+    let leaseAmount = loadInt("LEASE_AMOUNT", 0)
+
+    let unleaseOrEmpty =
+        if leaseId.isDefined() then
+            [LeaseCancel(leaseId.value())]
+        else []
+
+    let lease = Lease(Address(fromBase58String(leaseNode)), leaseAmount)
+    let leaseActions =
+        [
+            lease,
+            BinaryEntry("LEASE_ID", calculateLeaseId(lease)),
+            IntegerEntry("LEASE_AMOUNT", leaseAmount),
+            StringEntry("LEASE_NODE", leaseNode)    
+        ]
+
+    (unleaseOrEmpty ++ leaseActions, unit)
+}
+
+@Callable(i)
+func deposit() = {
+    let caller = i.caller.toString()
+
+    strict err =
+        if i.payments.size() < 1 then
+            throw("deposit: no payments")
+        else if i.payments[0].assetId != unit then
+            throw("deposit: payment is not waves")
+        else if i.payments[0].amount <= 0 then
+            throw("deposit: invalid payment amount")
+        else unit
+
+    let asset = loadAsset()
+    let assetQuantity = match assetInfo(asset) {
+        case a:Asset =>
+            a.quantity.toBigInt()
+        case _ => throw("deposit: contract not initialized")
+    }
+
+    let totalDeposit = loadInt("TOTAL_DEPOSIT", 0)
+
+    let lastRate = loadBigInt("LAST_RATE", PERCENT_FACTOR)
+    let currentRate = loadBigInt("CURRENT_RATE", ZERO_BIGINT)
+    let lastHeight = loadInt("LAST_HEIGHT", 0)
+    let targetHeight = [loadInt("TARGET_HEIGHT", 0), lastBlock.height].min()
+
+    let lastRateUpdated = lastRate + currentRate * (targetHeight - lastHeight).toBigInt()
+    let issueAmount = fraction(i.payments[0].amount.toBigInt(), PERCENT_FACTOR, lastRateUpdated, FLOOR).toInt()
+    let currentRateUpdated = fraction(currentRate, assetQuantity, (assetQuantity + issueAmount.toBigInt()), FLOOR)
+    let lastHeightUpdated = targetHeight
+ 
+    let leaseActions = _updateLeasing(i.payments[0].amount)
+
+    (
+        [
+            Reissue(asset, issueAmount, true),
+            ScriptTransfer(i.caller, issueAmount, asset),
+            IntegerEntry("TOTAL_DEPOSIT", totalDeposit + i.payments[0].amount),
+            BinaryEntry("LAST_RATE", lastRateUpdated.toBytes()),
+            BinaryEntry("CURRENT_RATE", currentRateUpdated.toBytes()),
+            IntegerEntry("LAST_HEIGHT", lastHeightUpdated)
+        ] ++ leaseActions, unit
+    )
+}
+
+@Callable(i)
+func stake(atBlocks_: Int) = {
+    let caller = i.caller.toString()
+
+    let asset = loadAsset()
+    let assetQuantity = match assetInfo(asset) {
+        case a:Asset =>
+            a.quantity.toBigInt()
+        case _ => throw("stake: contract not initialized")
+    }
+
+    strict err =
+        if i.caller != getLeaseNode() then
+            throw("stake: caller is not allowed")
+        else if atBlocks_ <= 0 then
+            throw("stake: invalid blocks")
+        else if i.payments.size() < 1 then
+            throw("stake: no payments")
+        else if i.payments[0].assetId != unit then
+            throw("stake: payment is not waves")
+        else if i.payments[0].amount <= 0 then
+            throw("stake: invalid payment amount")
+        else if assetQuantity == ZERO_BIGINT then
+            throw("stake: no deposits to stake for")
+        else unit
+
+    let lastRate = loadBigInt("LAST_RATE", PERCENT_FACTOR)
+    let currentRate = loadBigInt("CURRENT_RATE", ZERO_BIGINT)
+    let lastHeight = loadInt("LAST_HEIGHT", 0)
+    let targetHeight = loadInt("TARGET_HEIGHT", 0)
+    let minTargetHeight = [targetHeight, lastBlock.height].min()
+
+    let actions =
+        if minTargetHeight == lastBlock.height then
+            # we're still in reward period, so commit old reward, count remaining reward and update rates
+            let lastRateUpdated = lastRate + (minTargetHeight - lastHeight).toBigInt() * currentRate # commit reward to now
+            let remainingReward = currentRate * (targetHeight - minTargetHeight).toBigInt()
+            let currentRateUpdated = fraction(i.payments[0].amount.toBigInt() * PERCENT_FACTOR + remainingReward, ONE_BIGINT, (assetQuantity * atBlocks_.toBigInt()))
+            let lastHeightUpdated = lastBlock.height
+            let targetHeightUpdated = lastHeightUpdated + atBlocks_
+
+            [
+                BinaryEntry("LAST_RATE", lastRateUpdated.toBytes()),
+                BinaryEntry("CURRENT_RATE", currentRateUpdated.toBytes()),
+                IntegerEntry("LAST_HEIGHT", lastHeightUpdated),
+                IntegerEntry("TARGET_HEIGHT", targetHeightUpdated)
+            ]
+
+        else if targetHeight > lastHeight then
+            # we have left reward period, but still have uncommited reward, so commit reward and update rates
+            let lastRateUpdated = lastRate + (targetHeight - lastHeight).toBigInt() * currentRate # # commit reward to targetHeight
+            let currentRateUpdated = fraction(i.payments[0].amount.toBigInt(), PERCENT_FACTOR, (assetQuantity * atBlocks_.toBigInt()))
+            let lastHeightUpdated = lastBlock.height
+            let targetHeightUpdated = lastHeightUpdated + atBlocks_
+
+            [
+                BinaryEntry("LAST_RATE", lastRateUpdated.toBytes()),
+                BinaryEntry("CURRENT_RATE", currentRateUpdated.toBytes()),
+                IntegerEntry("LAST_HEIGHT", lastHeightUpdated),
+                IntegerEntry("TARGET_HEIGHT", targetHeightUpdated)
+            ]
+
+        else
+            # we have left reward period, all rewards are commited, just update rates
+            let currentRateUpdated = fraction(i.payments[0].amount.toBigInt(), PERCENT_FACTOR, (assetQuantity * atBlocks_.toBigInt()))
+            let lastHeightUpdated = lastBlock.height
+            let targetHeightUpdated = lastHeightUpdated + atBlocks_
+
+            [
+                BinaryEntry("CURRENT_RATE", currentRateUpdated.toBytes()),
+                IntegerEntry("LAST_HEIGHT", lastHeightUpdated),
+                IntegerEntry("TARGET_HEIGHT", targetHeightUpdated)
+            ]
+
+    let leaseActions = _updateLeasing(i.payments[0].amount)
+
+    (
+        actions ++ leaseActions, unit
+    )
+}
+
+@Callable(i)
+func withdraw() = {
+    let caller = i.caller.toString()
+    let asset = loadAsset()
+
+    strict err =
+        if i.payments.size() < 1 then
+            throw("withdraw: no payments")
+        else if i.payments[0].assetId != asset then
+            throw("withdraw: payment is not staked waves")
+        else if i.payments[0].amount <= 0 then
+            throw("withdraw: invalid payment amount")
+        else unit
+
+    let assetQuantity = match assetInfo(asset) {
+        case a:Asset =>
+            a.quantity.toBigInt()
+        case _ => throw("withdraw: contract not initialized")
+    }
+
+    let lastRate = loadBigInt("LAST_RATE", PERCENT_FACTOR)
+    let currentRate = loadBigInt("CURRENT_RATE", ZERO_BIGINT)
+    let lastHeight = loadInt("LAST_HEIGHT", 0)
+    let targetHeight = [loadInt("TARGET_HEIGHT", 0), lastBlock.height].min()
+
+    let lastRateUpdated = lastRate + currentRate * (targetHeight - lastHeight).toBigInt()
+    let wavesAmount = fraction(i.payments[0].amount.toBigInt(), lastRateUpdated, PERCENT_FACTOR, FLOOR).toInt()
+    let currentRateUpdated = fraction(currentRate, assetQuantity, (assetQuantity - i.payments[0].amount.toBigInt()), FLOOR)
+    let lastHeightUpdated = targetHeight
+
+    let leaseActions = _updateLeasing(-1 * wavesAmount)
+
+    (
+        leaseActions ++ [
+            Burn(asset, i.payments[0].amount),
+            ScriptTransfer(i.caller, wavesAmount, unit),
+            BinaryEntry("LAST_RATE", lastRateUpdated.toBytes()),
+            BinaryEntry("CURRENT_RATE", currentRateUpdated.toBytes()),
+            IntegerEntry("LAST_HEIGHT", lastHeightUpdated)
+        ], unit
+    )
+}
+
+@Verifier(tx)
+func verify() = {
+    let multisigContract = this.getStringValue("MULTISIG").fromBase58String().addressFromPublicKey()
+    let quorum = multisigContract.getIntegerValue("QUORUM")
+    let publicKeys = multisigContract.getStringValue("PUBLIC_KEYS")
+    let publicKeysList = publicKeys.split(SEPARATOR)
+
+    func verifier(acc: (Int,Int), publicKeyStr: String) = {
+        let publicKey = fromBase58String(publicKeyStr)
+        if sigVerify(tx.bodyBytes, tx.proofs[acc._1], publicKey) then 
+            (acc._1 + 1, acc._2 + 1)
+        else 
+            (acc._1 + 1, acc._2)
+    }
+
+    let result = FOLD<10>(publicKeysList, (1, 0), verifier)
+    result._2 >= quorum
+}

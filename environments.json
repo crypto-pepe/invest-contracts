@@ -1,0 +1,55 @@
+{
+    "defaultEnvName": "custom",
+    "custom": {
+        "accounts": ["neo", "morpheus", "trinity", "max", "thomas", "gerry", "jack", "lease_node_1"],
+        "amountPerAccount": 22000000000000,
+        "contracts": ["waves_staking", "technical"],
+        "contractsPath": "ride/",
+        "contractsExtention": ".ride",
+        "amountPerContract": 10000000000,
+        "amountPerAsset": 22000000000000,
+        "hotWallet": "3MNyNA5QedugKn2G2RcBbMqq4HFNdg5mLwH",
+        "nonceOffset": 1,
+        "network": {
+            "apiKey": "waves-private-node",
+            "WavesTransferFee": 100000,
+            "WavesInvokeFee": 500000,
+            "nodeAPI": "http://localhost:6869",
+            "nodeTimeout": 10000,
+            "chaidID": "R"
+        }
+    },
+    "testnet": {
+        "accounts": ["neo", "morpheus", "trinity", "max", "thomas", "gerry", "jack", "lease_node_1"],
+        "amountPerAccount": 100000000000,
+        "contracts": ["waves_staking", "technical"],
+        "contractsPath": "ride/",
+        "contractsExtention": ".ride",
+        "amountPerContract": 10000000000,
+        "nonceOffset": 1,
+        "network": {
+            "apiKey": "waves-private-node",
+            "WavesTransferFee": 100000,
+            "WavesInvokeFee": 500000,
+            "nodeAPI": "https://nodes-testnet.wavesnodes.com",
+            "nodeTimeout": 30000,
+            "chaidID": "T"
+        }
+    },
+    "mainnet": {
+        "accounts": ["neo", "morpheus", "trinity", "max", "thomas", "gerry", "jack", "lease_node_1"],
+        "amountPerAccount": 100000000000,
+        "contracts": ["waves_staking", "technical"],
+        "contractsPath": "ride/",
+        "contractsExtention": ".ride",
+        "amountPerContract": 10000000000,
+        "network": {
+            "apiKey": "waves-private-node",
+            "WavesTransferFee": 100000,
+            "WavesInvokeFee": 500000,
+            "nodeAPI": "https://nodes.wavesnodes.com'",
+            "nodeTimeout": 60000,
+            "chaidID": "W"
+        }
+    }
+}

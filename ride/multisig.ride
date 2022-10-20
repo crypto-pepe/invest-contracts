@@ -1,0 +1,128 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let SEPARATOR = "__"
+
+func validateOwner(acc: Int, elem: String) = {
+    if elem == "" then
+        throw("invalid owner")
+    else if fromBase58String(elem).size() != 32 then
+        throw("invalid owner public key")
+    else acc
+}
+
+@Callable(i)
+func init(owners: List[String], quorum: Int) = {
+    strict err = match getString("PUBLIC_KEYS") {
+        case a:String => throw("init: already initialized")
+        case _ => unit
+    }
+
+    strict err1 =
+        if owners.size() <= 0 || owners.size() > 10 then
+            throw("init: invalid owners")
+        else if quorum <= 0 || quorum > owners.size() then
+            throw("init: invalid quorum")
+        else unit
+
+    strict err2 = FOLD<10>(owners, 0, validateOwner)
+
+    (
+        [
+            StringEntry("PUBLIC_KEYS", makeString(owners, SEPARATOR)),
+            IntegerEntry("QUORUM", quorum)
+        ], unit
+    )
+}
+
+@Callable(i)
+func addOwner(publicKey: String) = {
+    let publicKeys = getStringValue("PUBLIC_KEYS")
+    let publicKeysList = publicKeys.split(SEPARATOR)
+
+    if i.caller != this then
+        throw("addOwner: not allowed")
+    else if validateOwner(0, publicKey) == 0 then
+        throw("addOwner: invalid public key")
+    else if publicKeysList.size() == 10 then
+        throw("addOwner: too many owners")
+    else
+        let publicKeysListUpdated = publicKeysList :+ publicKey
+        let publicKeysUpdated = [StringEntry("PUBLIC_KEYS", makeString(publicKeysListUpdated, SEPARATOR))]
+
+    (publicKeysUpdated, unit)
+}
+
+@Callable(i)
+func removeOwner(publicKey: String) = {
+    let quorum = getIntegerValue("QUORUM")
+    let publicKeys = getStringValue("PUBLIC_KEYS")
+    let publicKeysList = publicKeys.split(SEPARATOR)
+
+    if i.caller != this then
+        throw("removeOwner: not allowed")
+    else if publicKey == "" then
+        throw("removeOwner: invalid public key")
+    else if publicKeysList.size() == 1 then
+        throw("removeOwner: too few owners")
+    else
+        let index = match indexOf(publicKeysList, publicKey) {
+            case a:Int => a
+            case _ => throw("removeOwner: no such owner")
+        }
+        let publicKeysListUpdated = removeByIndex(publicKeysList, index)
+        let publicKeysUpdated = [StringEntry("PUBLIC_KEYS", makeString(publicKeysListUpdated, SEPARATOR))]
+
+        let quorumUpdated =
+            if quorum > publicKeysListUpdated.size() then
+                [IntegerEntry("QUORUM", publicKeysListUpdated.size())]
+            else []
+
+    (publicKeysUpdated ++ quorumUpdated, unit)
+}
+
+@Callable(i)
+func setQuorum(quorum: Int) = {
+    let publicKeys = getStringValue("PUBLIC_KEYS")
+    let publicKeysList = publicKeys.split(SEPARATOR)
+
+    if i.caller != this then
+        throw("setQuorum: not allowed")
+    else if quorum <= 0 || quorum > publicKeysList.size() then
+        throw("setQuorum: invalid quorum")
+    else
+        let quorumUpdated = [IntegerEntry("QUORUM", quorum)]
+
+    (quorumUpdated, unit)
+}
+
+@Verifier(tx)
+func verify() = {
+    match tx {
+        case t:InvokeScriptTransaction | SetScriptTransaction => 
+            let quorum = match getInteger("QUORUM") {
+                case a:Int => a
+                case _ => 0
+            }
+
+            let publicKeys = match getString("PUBLIC_KEYS") {
+                case a:String => a
+                case _ => ""
+            }
+
+            func verifier(acc: (Int,Int), publicKeyStr: String) = {
+                let publicKey = fromBase58String(publicKeyStr)
+                if sigVerify(tx.bodyBytes, tx.proofs[acc._1], publicKey) then 
+                    (acc._1 + 1, acc._2 + 1)
+                else 
+                    (acc._1 + 1, acc._2)
+            }
+
+            let publicKeysList = publicKeys.split(SEPARATOR)
+            let result = FOLD<10>(publicKeysList, (1, 0), verifier)
+
+            result._2 >= quorum
+        case _ => false
+    }
+}
