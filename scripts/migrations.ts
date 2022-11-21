@@ -1,5 +1,5 @@
 import fs from 'fs';
-import path, { resolve } from 'path';
+import path from 'path';
 import yargs from 'yargs';
 import inquirer from 'inquirer';
 import {
@@ -9,19 +9,13 @@ import {
   keyPair,
 } from '@waves/ts-lib-crypto';
 import {
-  WavesNetwork,
-  WavesNetworkCustom,
-  WavesNetworkMainnet,
-  WavesNetworkTestnet,
-} from '../utils/network';
-import {
-  data,
-  transfer,
-  invoke,
+  NetworkConfig,
   getIntegerValue,
-  getScript,
-} from '../utils/transaction';
-import { ProofsGenerator } from '../utils/script';
+  getScriptInfo,
+  invoke,
+  ProofsGenerator
+} from '@pepe-team/waves-sc-test-utils';
+import { getEnvironmentByName } from 'relax-env-json';
 
 const migrationsDir = './migrations/';
 
@@ -54,18 +48,13 @@ const migrationsDir = './migrations/';
       demandOption: true,
     }).argv;
 
-  let network: WavesNetwork;
+  let network: NetworkConfig;
 
   switch (options.network) {
-    case 'mainnet': {
-      network = WavesNetworkMainnet;
-      break;
-    }
+    case 'mainnet':
     case 'testnet':
-      network = WavesNetworkTestnet;
-      break;
     case 'custom':
-      network = WavesNetworkCustom;
+      network = getEnvironmentByName(options.network).network;
       break;
     default:
       throw new Error('Select network: mainnet, testnet or custom');
@@ -78,12 +67,12 @@ const migrationsDir = './migrations/';
   const deployerPrivateKey = keyPair(deployerSeed).privateKey;
   const migrationContract = address(
     seedWithNonce(deployerSeed, 1),
-    network.chaidID
+    network.chainID
   );
 
   console.log('Migration contract address =', migrationContract);
 
-  const migrationContractScript = await getScript(
+  const migrationContractScript = await getScriptInfo(
     migrationContract,
     network
   ).catch((e) => {
@@ -261,7 +250,7 @@ const ledgerProofsGenerator: ProofsGenerator = async (message: Uint8Array) => {
 
 async function deployMigrationScript(
   deployerSeed: string,
-  network: WavesNetwork
+  network: NetworkConfig
 ) {
   const migrations = (
     await fs.promises.readdir(path.resolve(process.cwd(), migrationsDir))
@@ -286,7 +275,7 @@ async function deployMigrationScript(
 
 async function getCompletedMigration(
   migrationContract: string,
-  network: WavesNetwork
+  network: NetworkConfig
 ) {
   const lastMigration = await getIntegerValue(
     migrationContract,

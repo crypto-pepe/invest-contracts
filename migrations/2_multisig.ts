@@ -1,30 +1,30 @@
 import path = require('path');
-import { deployScript, ProofsGenerator } from '../utils/script';
-import { transfer, data, invoke } from '../utils/transaction';
 import {
-  WavesInvokeFee,
-  WavesNetwork,
-  WavesNetworkMainnet,
-  WavesSetScriptFee,
-} from '../utils/network';
+  deployScript,
+  ProofsGenerator,
+  invoke,
+  transfer,
+  NetworkConfig,
+} from '@pepe-team/waves-sc-test-utils';
 import { address, seedWithNonce, keyPair } from '@waves/ts-lib-crypto';
 
 export default async function (
   deployerSeed: string,
   appliedNonce: number,
-  network: WavesNetwork,
+  network: NetworkConfig,
   proofsGenerator: ProofsGenerator
 ) {
   const deployerPrivateKey = keyPair(deployerSeed).privateKey;
   const contract = keyPair(seedWithNonce(deployerSeed, appliedNonce + 1));
   const contractAddress = address(
     { publicKey: contract.publicKey },
-    network.chaidID
+    network.chainID
   );
+  console.log('Multisig contract address =', contractAddress);
 
   await transfer(
     {
-      amount: WavesSetScriptFee + WavesInvokeFee,
+      amount: network.setScriptFee + network.invokeFee,
       recipient: contractAddress,
     },
     deployerPrivateKey,
@@ -35,8 +35,8 @@ export default async function (
   });
 
   let defaultQuorum = 0;
-  switch (network) {
-    case WavesNetworkMainnet:
+  switch (network.name) {
+    case 'mainnet':
       defaultQuorum = 3;
       break;
     default:
@@ -89,7 +89,7 @@ export default async function (
           },
         ],
       },
-      fee: 100500000,
+      fee: 500000,
     },
     deployerPrivateKey,
     network,

@@ -1,0 +1,74 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let SEPARATOR = "__"
+
+@Callable(i)
+func bigintToBinary(a_: Int) = {
+    let _a = a_.toBigInt()
+    (
+        [
+            BinaryEntry("BINARY_INT", _a.toBytes())
+        ], unit
+    )
+}
+
+@Callable(i)
+func setMultisigParams(
+    address_: String,
+    txid_: String,
+    isValid_: Boolean
+) = {
+    (
+        [
+            BooleanEntry("STATUS__" + address_ + SEPARATOR + txid_, isValid_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func setClaimer(
+    claimer_: String,
+    lastClaim_: Int,
+    reward_: Int,
+    lastRewardBlock_: Int,
+    claimInterval_: Int
+) = {
+    (
+        [
+            StringEntry("CLAIMER", claimer_),
+            IntegerEntry("LAST_CLAIM", lastClaim_),
+            IntegerEntry("REWARD", reward_),
+            IntegerEntry("LAST_REWARD_BLOCK", lastRewardBlock_),
+            IntegerEntry("CLAIM_INTERVAL", claimInterval_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func claimReward() = {
+    let lastClaim = getIntegerValue("LAST_CLAIM")
+    let reward = getIntegerValue("REWARD")
+    let lastRewardBlock = getIntegerValue("LAST_REWARD_BLOCK")
+    let claim_interval = getIntegerValue("CLAIM_INTERVAL");
+
+    if i.caller != getStringValue("CLAIMER").addressFromStringValue() then
+        throw("claimReward: permission denied")
+    else if reward < 0 then
+        ([], unit)
+    else if lastRewardBlock < lastClaim + claim_interval then
+        ([], unit)
+    else
+        (
+            [
+                ScriptTransfer(i.caller, reward, unit),
+                IntegerEntry("LAST_CLAIM", lastBlock.height)
+            ], reward
+        )
+}
+
+@Verifier(tx)
+func verify() = {
+    sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+}

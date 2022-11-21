@@ -1,55 +1,148 @@
 {
     "defaultEnvName": "custom",
     "custom": {
-        "accounts": ["neo", "morpheus", "trinity", "max", "thomas", "gerry", "jack", "lease_node_1"],
+        "leasingNode": {
+            "infraFee": 250,
+            "maxInfraFee": 10000
+        },
+        "assets": [
+            {
+                "name": "USDN",
+                "description": "Neutrino USD",
+                "quantity": 1000000000000000,
+                "decimals": 6,
+                "assetId": ""
+            },
+            {
+                "name": "WBTC",
+                "description": "Wrapped BTC",
+                "quantity": 100000000000000000,
+                "decimals": 8,
+                "assetId": ""
+            },
+            {
+                "name": "WETH",
+                "description": "Wrapped ETH",
+                "quantity": 100000000000000000,
+                "decimals": 8,
+                "assetId": ""
+            }
+        ],
+        "accounts": ["neo", "morpheus", "trinity", "max", "thomas", "gerry", "jack", "lease_node_1", "tech_acc", "manager", "tech1", "tech2", "tech3", "tech4"],
         "amountPerAccount": 22000000000000,
-        "contracts": ["waves_staking", "technical"],
+        "contracts": ["tokenized_staking", "leasing_node_new", "waves_staking_adapter", "multisig", "technical"],
         "contractsPath": "ride/",
         "contractsExtention": ".ride",
-        "amountPerContract": 10000000000,
+        "amountPerContract": 50000000000000,
         "amountPerAsset": 22000000000000,
         "hotWallet": "3MNyNA5QedugKn2G2RcBbMqq4HFNdg5mLwH",
         "nonceOffset": 1,
         "network": {
-            "apiKey": "waves-private-node",
-            "WavesTransferFee": 100000,
-            "WavesInvokeFee": 500000,
+            "name": "custom",
             "nodeAPI": "http://localhost:6869",
             "nodeTimeout": 10000,
-            "chaidID": "R"
+            "chainID": "R",
+            "apiKey": "waves-private-node",
+            "transferFee": 100000,
+            "invokeFee": 500000,
+            "additionalFee": 400000,
+            "issueFee": 100000000,
+            "setScriptFee": 1400000
         }
     },
     "testnet": {
-        "accounts": ["neo", "morpheus", "trinity", "max", "thomas", "gerry", "jack", "lease_node_1"],
+        "leasingNode": {
+            "infraFee": 2500,
+            "maxInfraFee": 10000
+        },
+        "assets": [
+            {
+                "name": "USDN",
+                "description": "Neutrino USD",
+                "quantity": 1000000000000000,
+                "decimals": 6,
+                "assetId": ""
+            },
+            {
+                "name": "WBTC",
+                "description": "Wrapped BTC",
+                "quantity": 100000000000000000,
+                "decimals": 8,
+                "assetId": ""
+            },
+            {
+                "name": "WETH",
+                "description": "Wrapped ETH",
+                "quantity": 100000000000000000,
+                "decimals": 8,
+                "assetId": ""
+            }
+        ],
+        "accounts": ["neo", "morpheus", "trinity", "max", "thomas", "gerry", "jack", "lease_node_1", "tech_acc", "manager", "tech1", "tech2", "tech3", "tech4"],
         "amountPerAccount": 100000000000,
-        "contracts": ["waves_staking", "technical"],
+        "contracts": ["tokenized_staking", "leasing_node_new", "waves_staking_adapter", "multisig", "technical"],
         "contractsPath": "ride/",
         "contractsExtention": ".ride",
         "amountPerContract": 10000000000,
         "nonceOffset": 1,
         "network": {
-            "apiKey": "waves-private-node",
-            "WavesTransferFee": 100000,
-            "WavesInvokeFee": 500000,
+            "name": "testnet",
             "nodeAPI": "https://nodes-testnet.wavesnodes.com",
             "nodeTimeout": 30000,
-            "chaidID": "T"
+            "chainID": "T",
+            "apiKey": "waves-private-node",
+            "transferFee": 100000,
+            "invokeFee": 500000,
+            "additionalFee": 400000,
+            "issueFee": 100000000,
+            "setScriptFee": 1400000
         }
     },
     "mainnet": {
-        "accounts": ["neo", "morpheus", "trinity", "max", "thomas", "gerry", "jack", "lease_node_1"],
+        "leasingNode": {
+            "infraFee": 2500,
+            "maxInfraFee": 10000
+        },
+        "assets": [
+            {
+                "name": "USDN",
+                "description": "Neutrino USD",
+                "quantity": 1000000000000000,
+                "decimals": 6,
+                "assetId": ""
+            },
+            {
+                "name": "WBTC",
+                "description": "Wrapped BTC",
+                "quantity": 100000000000000000,
+                "decimals": 8,
+                "assetId": ""
+            },
+            {
+                "name": "WETH",
+                "description": "Wrapped ETH",
+                "quantity": 100000000000000000,
+                "decimals": 8,
+                "assetId": ""
+            }
+        ],
+        "accounts": ["neo", "morpheus", "trinity", "max", "thomas", "gerry", "jack", "lease_node_1", "tech_acc", "manager", "tech1", "tech2", "tech3", "tech4"],
         "amountPerAccount": 100000000000,
-        "contracts": ["waves_staking", "technical"],
+        "contracts": ["tokenized_staking", "leasing_node_new", "waves_staking_adapter", "multisig", "technical"],
         "contractsPath": "ride/",
         "contractsExtention": ".ride",
         "amountPerContract": 10000000000,
         "network": {
-            "apiKey": "waves-private-node",
-            "WavesTransferFee": 100000,
-            "WavesInvokeFee": 500000,
+            "name": "mainnet",
             "nodeAPI": "https://nodes.wavesnodes.com'",
             "nodeTimeout": 60000,
-            "chaidID": "W"
+            "chainID": "W",
+            "apiKey": "waves-private-node",
+            "transferFee": 100000,
+            "invokeFee": 500000,
+            "additionalFee": 400000,
+            "issueFee": 100000000,
+            "setScriptFee": 1400000
         }
     }
 }

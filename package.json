@@ -1,6 +1,6 @@
 {
   "name": "invest-contracts",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "RIDE smart contracts for investments",
   "main": "index.js",
   "directories": {
@@ -13,7 +13,7 @@
     "reset-state": "npm run stop-node && npm run drop-node && npm run start-node",
     "explorer": "docker run -d -e API_NODE_URL=http://localhost:6869 -e NODE_LIST=http://localhost:6869 -p 3000:8080 wavesplatform/explorer",
     "compile": "surfboard compile --fullInfo",
-    "test": "mocha --config .staking.mocharc.json ./test/waves.staking/*.test.ts",
+    "test": "mocha --config .mocharc.e2e.json ./test/tokenized.staking/e2e.test.ts",
     "deploy": "npx ts-node scripts/migrations.ts",
     "deploy-testnet": "npx ts-node scripts/migrations.ts",
     "deploy-mainnet": "npx ts-node scripts/migrations.ts",
@@ -30,6 +30,8 @@
   },
   "homepage": "https://gitlab.pepe-team.tech/pepe-team/invest/contracts#readme",
   "devDependencies": {
+    "@ledgerhq/hw-transport-node-hid-singleton": "^6.28.2",
+    "@pepe-team/waves-sc-test-utils": "^1.0.0",
     "@types/chai": "^4.3.0",
     "@types/expect": "^24.3.0",
     "@types/inquirer": "^9.0.2",
@@ -38,7 +40,8 @@
     "@typescript-eslint/eslint-plugin": "^5.17.0",
     "@typescript-eslint/parser": "^5.17.0",
     "@waves/bignumber": "^1.1.1",
-    "@waves/node-api-js": "^1.2.5-beta.17",
+    "@waves/ledger": "^4.0.0",
+    "@waves/node-api-js": "^1.2.10",
     "@waves/protobuf-serialization": "^1.2.4",
     "@waves/ride-js": "^2.1.10",
     "@waves/surfboard": "^2.2.5",
@@ -61,8 +64,5 @@
     "ts-node": "^10.7.0",
     "ts-node-dev": "^1.1.8",
     "typescript": "^4.6.3"
-  },
-  "dependencies": {
-    "bs58": "^5.0.0"
   }
 }
