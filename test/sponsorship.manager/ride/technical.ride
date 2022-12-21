@@ -1,0 +1,135 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let SEPARATOR = "__"
+let REWARD_COMPENSATION = 500000
+let CLAIM_INTERVAL = 1440
+
+
+@Callable(i)
+func bigintToBinary(a_: Int) = {
+    let _a = a_.toBigInt()
+    (
+        [
+            BinaryEntry("BINARY_INT", _a.toBytes())
+        ], unit
+    )
+}
+
+@Callable(i)
+func setMultisigParams(
+    address_: String,
+    txid_: String,
+    isValid_: Boolean
+) = {
+    (
+        [
+            BooleanEntry("STATUS__" + address_ + SEPARATOR + txid_, isValid_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func setTestAsset(
+    name_: String,
+    description_: String
+) = {
+    let issue = Issue(name_, description_, 0, 8, true)
+    let assetId = calculateAssetId(issue)
+
+    ([
+        StringEntry("ASSET", toBase58String(assetId)),
+        issue
+    ], unit)
+}
+
+@Callable(i)
+func mintTestAssetTo(
+    address_: String,
+    amount_: Int
+) = {
+    let assetId = getStringValue("ASSET")
+    let asset = fromBase58String(assetId)
+    let recipient = addressFromStringValue(address_)
+    (
+        [
+            Reissue(asset, amount_, true),
+            ScriptTransfer(recipient, amount_, asset)
+        ], unit
+    )
+}
+
+@Callable(i)
+func setUpdateSponsorship(
+    withoutError_: Boolean,
+    toExchange_: Int
+) = {
+    (
+        [
+            BooleanEntry("UPDATE_SPONSORSHIP", withoutError_),
+            IntegerEntry("UPDATE_SPONSORSHIP_EXCHANGE", toExchange_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func updateSponsorship(
+    fee_: Int,
+    sponsoredWaves_: Int
+) = {
+    strict isError = getBooleanValue("UPDATE_SPONSORSHIP").valueOrErrorMessage("jopa!")
+    strict err = if(!isError) then
+        throw("jopa!")
+    else unit
+    let toExchange = getIntegerValue("UPDATE_SPONSORSHIP_EXCHANGE")
+
+    (
+        [], toExchange
+    )
+}
+
+@Callable(i)
+func setWithdraw(
+    isOk_: Boolean,
+    amount_: Int
+) = {
+    (
+        [
+            BooleanEntry("WITHDRAW", isOk_),
+            IntegerEntry("WITHDRAW_AMOUNT", amount_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func setPayeer(address_: String) = {
+    (
+        [
+            StringEntry("PAYEER_ADDRESS", address_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func withdraw() = {
+    strict isError = getBooleanValue("WITHDRAW").valueOrErrorMessage("jopa!")
+    strict err = if(!isError) then
+        throw("jopa!")
+    else unit
+    let amount = getIntegerValue("WITHDRAW_AMOUNT")
+    let payeerAddress = getStringValue("PAYEER_ADDRESS")
+    let payeer = addressFromStringValue(payeerAddress)
+    strict payment = invoke(payeer, "paid", [amount], [])
+
+    (
+        [
+            ScriptTransfer(i.caller, amount, unit)
+        ], unit
+    )
+}
+
+@Verifier(tx)
+func verify() = {
+    sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+}

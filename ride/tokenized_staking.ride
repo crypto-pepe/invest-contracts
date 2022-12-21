@@ -1,0 +1,455 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let SEPARATOR = "__"
+let WAVES = "WAVES"
+let KEY_MULTISIG = "MULTISIG"
+let KEY_STATUS = "STATUS"
+let KEY_BASE_ASSET = "BASE_ASSET"
+let KEY_ASSET = "ASSET"
+let KEY_STAKING_ADAPTER = "STAKING_ADAPTER"
+let KEY_STAKING_AMOUNT = "STAKING_AMOUNT"
+let KEY_LAST_RATE = "LAST_RATE"
+let KEY_CURRENT_RATE = "CURRENT_RATE"
+let KEY_LAST_HEIGHT = "LAST_HEIGHT"
+let KEY_TARGET_HEIGHT = "TARGET_HEIGHT"
+let KEY_SPONSORSHIP_MANAGER = "SPONSORSHIP_MANAGER"
+
+let FUNC_STAKE = "stake"
+let FUNC_UNSTAKE = "unstake"
+let FUNC_CLAIM_REWARD = "claimReward"
+
+let PERCENT_FACTOR = 1000000000000.toBigInt()
+let ZERO_BIGINT = 0.toBigInt()
+let ONE_BIGINT = 1.toBigInt()
+let INIT_AMOUNT = 100000000
+
+# ---------- Validation functions ----------
+
+func _validateAddress(address_: String) = {
+    match addressFromString(address_) {
+        case a:Address => true
+        case _ => false
+    }
+}
+
+func _validateAsset(asset_: String) = {
+    if asset_ == WAVES then true 
+    else
+        match assetInfo(fromBase58String(asset_)) {
+            case a:Asset => true
+            case _ => false
+        }
+}
+
+# ---------- Converting functions ----------
+
+func _toAssetVector(asset_: String) = {
+    if asset_ == WAVES then
+        unit
+    else
+        fromBase58String(asset_)
+}
+
+# ---------- Utils functions ----------
+
+func _getAssetDecimals(asset_: ByteVector | Unit) = {
+    match asset_ {
+        case a:ByteVector => 
+            match assetInfo(a) {
+                case asset:Asset => asset.decimals
+                case _ => throw("_getAssetDecimals: no such asset")
+            }
+        case _ => 8
+    }
+}
+
+func _getAssetQuantity(asset_: ByteVector) = {
+    match assetInfo(asset_) {
+        case a:Asset => a.quantity
+        case _ => throw("_getAssetQuantity: no such asset")
+    }
+}
+
+func _getAssetBalance(asset_: ByteVector | Unit, address: Address) = {
+    match asset_ {
+        case a: ByteVector => assetBalance(address, a)
+        case _ => wavesBalance(address).regular
+    }
+}
+
+# ---------- Data structures functions ----------
+
+func _loadBaseAsset() = {
+    match getString(KEY_BASE_ASSET) {
+        case a:String =>
+            if a == WAVES then unit else fromBase58String(a)
+        case _ => throw("_loadBaseAsset: no base asset")
+    }
+}
+
+func _loadStakingAdapter() = {
+    match getString(KEY_STAKING_ADAPTER) {
+        case a:String => addressFromStringValue(a)
+        case _ => throw("_loadStakingAdapter: no staking adapter")
+    }
+}
+
+func _loadSponsorshipManager() = {
+    match getString(KEY_SPONSORSHIP_MANAGER) {
+        case a:String => addressFromStringValue(a)
+        case _ => throw("_loadSponsorshipManager: no sponsorship manager")
+    }
+}
+
+func _loadInt(key_: String, default_: Int) = {
+    match getInteger(key_) {
+        case a:Int => a
+        case _ => default_
+    }
+}
+
+func _loadBigInt(key_: String, default_: BigInt) = {
+    match getBinary(key_) {
+        case a:ByteVector => a.toBigInt()
+        case _ => default_
+    }
+}
+
+func _loadAsset() = {
+    match getString(KEY_ASSET) {
+        case a:String => fromBase58String(a)
+        case _ => base58''
+    }
+}
+
+# ---------- Staking functions ----------
+
+func _updateStaking(asset_: ByteVector | Unit, amount_: Int, adapter_: Address) = {
+    let stakingAmount = _loadInt(KEY_STAKING_AMOUNT, 0)
+    let newStakingAmount = stakingAmount + amount_
+
+    strict invocation =
+        if amount_ > 0 then
+            invoke(adapter_, FUNC_STAKE, [], [AttachedPayment(asset_, amount_)])
+        else
+            invoke(adapter_, FUNC_UNSTAKE, [-1 * amount_], [])
+
+    [
+        IntegerEntry(KEY_STAKING_AMOUNT, newStakingAmount)
+    ]
+}
+
+func _checkpoint(compensation: Boolean) = {
+    strict invocation = invoke(_loadStakingAdapter(), FUNC_CLAIM_REWARD, [], [])
+    match invocation {
+        case reward:(Int, Int, Int) =>
+            # reward._1 -> base amount to stake
+            # reward._2 -> base amount to i.originCaller if compensation
+            # reward._3 -> stake at number (in blocks)
+            if compensation then
+                strict stake = invoke(this, FUNC_STAKE, [reward._1, reward._3], [])
+                (true, reward._2)
+            else
+                strict stake = invoke(this, FUNC_STAKE, [reward._1 + reward._2, reward._3], [])
+                (true, 0)
+        case _ => (false, 0)
+    }
+}
+
+# ---------- Public callable functions ----------
+
+@Callable(i)
+func init(tokenName_: String, tokenDescr_: String, baseAsset_: String, stakingAdapter_: String) = {
+    strict multisig = getString(KEY_MULTISIG).valueOrErrorMessage("init: no multisig set")
+    let asset = _loadAsset()
+    let baseAsset = _toAssetVector(baseAsset_)
+
+    strict err =
+        if i.caller != this then
+            throw("init: permission denied")
+        else if asset != base58'' then
+            throw("init: already initialized")
+        else if tokenName_.size() < 4 || tokenName_.size() > 16 then
+            throw("init: invalid token name")
+        else if tokenDescr_.size() > 1000 then
+            throw("init: invalid token description")
+        else if !_validateAsset(baseAsset_) then
+            throw("init: invalid base asset")
+        else if !_validateAddress(stakingAdapter_) then
+            throw("init: invalid staking adapter")
+        else unit
+
+    let tokenDecimals = _getAssetDecimals(baseAsset)
+    let issue = Issue(tokenName_, tokenDescr_, INIT_AMOUNT, tokenDecimals, true)
+    let assetId = calculateAssetId(issue)
+    let stakeActions = _updateStaking(baseAsset, INIT_AMOUNT, addressFromStringValue(stakingAdapter_))
+
+    (
+        [
+            StringEntry(KEY_BASE_ASSET, baseAsset_),
+            StringEntry(KEY_STAKING_ADAPTER, stakingAdapter_),
+            StringEntry(KEY_ASSET, toBase58String(assetId)),
+            issue
+        ] ++ stakeActions, unit
+    )
+}
+
+@Callable(i)
+func getRate() = {
+    let lastRate = _loadBigInt(KEY_LAST_RATE, PERCENT_FACTOR)
+    let currentRate = _loadBigInt(KEY_CURRENT_RATE, ZERO_BIGINT)
+    let lastHeight = _loadInt(KEY_LAST_HEIGHT, 0)
+    let targetHeight = [_loadInt(KEY_TARGET_HEIGHT, 0), height].min()
+    let rate = lastRate + currentRate * (targetHeight - lastHeight).toBigInt()
+
+    ([], rate.toString())
+}
+
+@Callable(i)
+func checkpoint() = {
+    strict checkpoint = _checkpoint(true)
+
+    if !checkpoint._1 then
+        throw("checkpoint: no reward")
+    else if checkpoint._2 > 0 then
+        ([ScriptTransfer(i.originCaller, checkpoint._2, _loadBaseAsset())], unit)
+    else
+        ([], unit)
+}
+
+@Callable(i)
+func deposit() = {
+    let caller = i.caller.toString()
+
+    let baseAsset = _loadBaseAsset()
+    let asset = _loadAsset()
+    let assetQuantity = _getAssetQuantity(asset).toBigInt()
+
+    strict err =
+        if i.payments.size() != 1 then
+            throw("deposit: no payments")
+        else if i.payments[0].assetId != baseAsset then
+            throw("deposit: payment is not in base asset")
+        else if i.payments[0].amount <= 0 then
+            throw("deposit: invalid payment amount")
+        else unit
+
+    strict checkpoint = _checkpoint(false)
+
+    let lastRate = _loadBigInt(KEY_LAST_RATE, PERCENT_FACTOR)
+    let currentRate = _loadBigInt(KEY_CURRENT_RATE, ZERO_BIGINT)
+    let lastHeight = _loadInt(KEY_LAST_HEIGHT, 0)
+    let targetHeight = [_loadInt(KEY_TARGET_HEIGHT, 0), height].min()
+
+    let lastRateUpdated = lastRate + currentRate * (targetHeight - lastHeight).toBigInt()
+    let issueAmount = fraction(i.payments[0].amount.toBigInt(), PERCENT_FACTOR, lastRateUpdated, FLOOR).toInt()
+    let currentRateUpdated = fraction(currentRate, assetQuantity, (assetQuantity + issueAmount.toBigInt()), FLOOR)
+    let lastHeightUpdated = targetHeight
+
+    let stakeActions = _updateStaking(baseAsset, i.payments[0].amount, _loadStakingAdapter())
+
+    (
+        [
+            Reissue(asset, issueAmount, true),
+            ScriptTransfer(i.caller, issueAmount, asset),
+            BinaryEntry(KEY_LAST_RATE, lastRateUpdated.toBytes()),
+            BinaryEntry(KEY_CURRENT_RATE, currentRateUpdated.toBytes()),
+            IntegerEntry(KEY_LAST_HEIGHT, lastHeightUpdated)
+        ] ++ stakeActions, unit
+    )
+}
+
+@Callable(i)
+func stake(amount_: Int, spreadBlocks_: Int) = {
+    let caller = i.caller.toString()
+
+    let baseAsset = _loadBaseAsset()
+    let asset = _loadAsset()
+    let assetQuantity = _getAssetQuantity(asset).toBigInt()
+
+    strict err =
+        if i.caller != this then
+            throw("stake: only this contract")
+        else if amount_ <= 0 then
+            throw("stake: invalid stake amount")
+        else if _getAssetBalance(baseAsset, this) < amount_ then
+            throw("stake: insufficient stake amount")
+        else if assetQuantity == ZERO_BIGINT then
+            throw("stake: no deposits to stake for")
+        else unit
+
+    let lastRate = _loadBigInt(KEY_LAST_RATE, PERCENT_FACTOR)
+    let currentRate = _loadBigInt(KEY_CURRENT_RATE, ZERO_BIGINT)
+    let lastHeight = _loadInt(KEY_LAST_HEIGHT, 0)
+    let targetHeight = _loadInt(KEY_TARGET_HEIGHT, 0)
+    let minTargetHeight = [targetHeight, height].min()
+
+    let actions =
+        if minTargetHeight == height then
+            # we're still in reward period, so commit old reward, count remaining reward and update rates
+            let lastRateUpdated = lastRate + (minTargetHeight - lastHeight).toBigInt() * currentRate # commit reward to now
+            let remainingReward = currentRate * (targetHeight - minTargetHeight).toBigInt()
+            let currentRateUpdated = fraction(amount_.toBigInt() * PERCENT_FACTOR + remainingReward, ONE_BIGINT, (assetQuantity * spreadBlocks_.toBigInt()))
+            let lastHeightUpdated = height
+            let targetHeightUpdated = lastHeightUpdated + spreadBlocks_
+
+            [
+                BinaryEntry(KEY_LAST_RATE, lastRateUpdated.toBytes()),
+                BinaryEntry(KEY_CURRENT_RATE, currentRateUpdated.toBytes()),
+                IntegerEntry(KEY_LAST_HEIGHT, lastHeightUpdated),
+                IntegerEntry(KEY_TARGET_HEIGHT, targetHeightUpdated)
+            ]
+
+        else if targetHeight > lastHeight then
+            # we have left reward period, but still have uncommited reward, so commit reward and update rates
+            let lastRateUpdated = lastRate + (targetHeight - lastHeight).toBigInt() * currentRate # commit reward to targetHeight
+            let currentRateUpdated = fraction(amount_.toBigInt(), PERCENT_FACTOR, (assetQuantity * spreadBlocks_.toBigInt()))
+            let lastHeightUpdated = height
+            let targetHeightUpdated = lastHeightUpdated + spreadBlocks_
+
+            [
+                BinaryEntry(KEY_LAST_RATE, lastRateUpdated.toBytes()),
+                BinaryEntry(KEY_CURRENT_RATE, currentRateUpdated.toBytes()),
+                IntegerEntry(KEY_LAST_HEIGHT, lastHeightUpdated),
+                IntegerEntry(KEY_TARGET_HEIGHT, targetHeightUpdated)
+            ]
+
+        else
+            # we have left reward period, all rewards are commited, just update rates
+            let currentRateUpdated = fraction(amount_.toBigInt(), PERCENT_FACTOR, (assetQuantity * spreadBlocks_.toBigInt()))
+            let lastHeightUpdated = height
+            let targetHeightUpdated = lastHeightUpdated + spreadBlocks_
+
+            [
+                BinaryEntry(KEY_CURRENT_RATE, currentRateUpdated.toBytes()),
+                IntegerEntry(KEY_LAST_HEIGHT, lastHeightUpdated),
+                IntegerEntry(KEY_TARGET_HEIGHT, targetHeightUpdated)
+            ]
+
+    let stakeActions = _updateStaking(baseAsset, amount_, _loadStakingAdapter())
+
+    (
+        actions ++ stakeActions, unit
+    )
+}
+
+@Callable(i)
+func withdraw() = {
+    let caller = i.caller.toString()
+
+    let baseAsset = _loadBaseAsset()
+    let asset = _loadAsset()
+    let assetQuantity = _getAssetQuantity(asset).toBigInt()
+
+    strict err =
+        if i.payments.size() < 1 then
+            throw("withdraw: no payments")
+        else if i.payments[0].assetId != asset then
+            throw("withdraw: payment is not in correct asset")
+        else if i.payments[0].amount <= 0 then
+            throw("withdraw: invalid payment amount")
+        else unit
+
+    strict checkpoint = _checkpoint(false)
+
+    let lastRate = _loadBigInt(KEY_LAST_RATE, PERCENT_FACTOR)
+    let currentRate = _loadBigInt(KEY_CURRENT_RATE, ZERO_BIGINT)
+    let lastHeight = _loadInt(KEY_LAST_HEIGHT, 0)
+    let targetHeight = [_loadInt(KEY_TARGET_HEIGHT, 0), height].min()
+
+    let lastRateUpdated = lastRate + currentRate * (targetHeight - lastHeight).toBigInt()
+    let baseAmount = fraction(i.payments[0].amount.toBigInt(), lastRateUpdated, PERCENT_FACTOR, FLOOR).toInt()
+    let currentRateUpdated = fraction(currentRate, assetQuantity, (assetQuantity - i.payments[0].amount.toBigInt()), FLOOR)
+    let lastHeightUpdated = targetHeight
+
+    let stakeActions = _updateStaking(baseAsset, -1 * baseAmount, _loadStakingAdapter())
+
+    (
+        stakeActions ++ [
+            Burn(asset, i.payments[0].amount),
+            ScriptTransfer(i.caller, baseAmount, unit),
+            BinaryEntry(KEY_LAST_RATE, lastRateUpdated.toBytes()),
+            BinaryEntry(KEY_CURRENT_RATE, currentRateUpdated.toBytes()),
+            IntegerEntry(KEY_LAST_HEIGHT, lastHeightUpdated)
+        ], unit
+    )
+}
+
+@Callable(i)
+func setMultisig(multisig_: String) = {
+    strict err =
+        if i.caller != this then
+            throw("setMultisig: permission denied")
+        else if !_validateAddress(multisig_) then
+            throw("setMultisig: invalid multisig address")
+        else unit
+
+    (
+        [
+            StringEntry(KEY_MULTISIG, multisig_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func setSponsorshipManager(manager_: String) = {
+    strict err =
+        if i.caller != this then
+            throw("setSponsorshipManager: permission denied")
+        else if !_validateAddress(manager_) then
+            throw("setSponsorshipManager: invalid manager address")
+        else unit
+
+    (
+        [
+            StringEntry(KEY_SPONSORSHIP_MANAGER, manager_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func updateSponsorship(minSponsoredAssetFee_: Int, wavesRequiredAmount_: Int) = {
+    strict err =
+        if i.caller != _loadSponsorshipManager() then
+            throw("updateSponsorship: permission denied")
+        else if minSponsoredAssetFee_ < 0 then
+            throw("updateSponsorship: invalid sponsorship fee")
+        else if wavesRequiredAmount_ < 0 then
+            throw("updateSponsorship: invalid waves required amount")
+        else unit
+
+    let sponsorAsset = _loadAsset()
+    let sponsorAmount = assetBalance(this, sponsorAsset)
+    let minSponsoredAssetFee =
+        if minSponsoredAssetFee_ == 0 then
+            unit
+        else
+            minSponsoredAssetFee_
+
+    let actions =
+        if wavesBalance(this).regular > wavesRequiredAmount_ then
+            [ScriptTransfer(i.caller, wavesBalance(this).regular - wavesRequiredAmount_, unit)]
+        else []
+
+    (
+        actions ++
+        [
+            ScriptTransfer(i.caller, sponsorAmount, sponsorAsset),
+            SponsorFee(sponsorAsset, minSponsoredAssetFee)
+        ], sponsorAmount
+    )
+}
+
+@Verifier(tx)
+func verify() = {
+    match getString(KEY_MULTISIG) {
+        case multisig: String => 
+            multisig
+                .addressFromStringValue()
+                .getBoolean(makeString([KEY_STATUS, this.toString(), tx.id.toBase58String()], SEPARATOR))
+                .valueOrElse(false)
+        case _ => sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+    }
+}

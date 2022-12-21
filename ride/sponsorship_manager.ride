@@ -1,0 +1,203 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let SEPARATOR = "__"
+let WAVES = "WAVES"
+let KEY_MULTISIG = "MULTISIG"
+let KEY_STATUS = "STATUS"
+let KEY_ASSET = "ASSET"
+let KEY_SPONSORSHIP = "SPONSORSHIP"
+
+let INVOKE_FEE = 500000
+let COMPENSATION = 2 * INVOKE_FEE
+
+let FUNC_UPDATE_SPONSORSHIP = "updateSponsorship"
+let FUNC_WITHDRAW = "withdraw"
+
+# ---------- Validation functions ----------
+
+func _validateAddress(address_: String) = {
+    match addressFromString(address_) {
+        case a:Address => true
+        case _ => false
+    }
+}
+
+# ---------- Converting functions ----------
+
+func _toAssetVector(asset_: String) = {
+    if asset_ == WAVES then
+        unit
+    else
+        fromBase58String(asset_)
+}
+
+# ---------- Data structures functions ----------
+
+func _loadSponsorship(tokenContract_: String) = {
+    match getString(makeString([KEY_SPONSORSHIP, tokenContract_], SEPARATOR)) {
+        case a:String =>
+            let struct = a.split(SEPARATOR)
+            (
+                struct[0],                      # tokenContract
+                struct[1],                      # tokenAsset
+                parseIntValue(struct[2]),       # minSponsoredAssetFee
+                parseIntValue(struct[3]),       # sponsoredWaves
+                parseIntValue(struct[4]),       # thresholdWaves
+                struct[5]                       # beneficiaryAddress
+            )
+        case _ => throw("_loadSponsorship: no sponsorship")
+    }
+}
+
+func _saveSponsorship(
+    sponsorship_: (String, String, Int, Int, Int, String)
+) = {
+    [
+        StringEntry(
+            makeString([KEY_SPONSORSHIP, sponsorship_._1], SEPARATOR),
+            makeString([
+                sponsorship_._1,                # tokenContract
+                sponsorship_._2,                # tokenAsset
+                sponsorship_._3.toString(),     # minSponsoredAssetFee 
+                sponsorship_._4.toString(),     # sponsoredWaves 
+                sponsorship_._5.toString(),     # thresholdWaves
+                sponsorship_._6                 # beneficiaryAddress
+            ], SEPARATOR)
+        )
+    ]
+}
+
+func _loadAsset(tokenContract: Address) = {
+    match getString(tokenContract, KEY_ASSET) {
+        case a:String => fromBase58String(a)
+        case _ => base58''
+    }
+}
+
+# ---------- Public callable functions ----------
+
+@Callable(i)
+func setupSponsorship(tokenContract_: String, minSponsoredAssetFee_: Int, sponsoredWaves_: Int, thresholdWaves_: Int, beneficiaryAddress_: String) = {
+    strict err =
+        if i.caller != this then
+            throw("setupSponsorship: permission denied")
+        else if !_validateAddress(tokenContract_) then
+            throw("setupSponsorship: invalid token contract")
+        else if minSponsoredAssetFee_ < 0 then
+            throw("setupSponsorship: invalid min sponsored asset fee")
+        else if sponsoredWaves_ < 0 then
+            throw("setupSponsorship: invalid sponsored waves")
+        else if thresholdWaves_ < 0 then
+            throw("setupSponsorship: invalid threshold waves")
+        else if !_validateAddress(beneficiaryAddress_) then
+            throw("setupSponsorship: invalid beneficiary address")
+        else unit
+
+    let tokenContract = addressFromStringValue(tokenContract_)
+    let tokenAsset = _loadAsset(tokenContract)
+    let wavesAmount = wavesBalance(tokenContract).regular
+    let wavesToCharge =
+        if sponsoredWaves_ > wavesAmount then
+            sponsoredWaves_ - wavesAmount
+        else 0
+
+    strict invocation = invoke(tokenContract, FUNC_UPDATE_SPONSORSHIP, [minSponsoredAssetFee_, sponsoredWaves_], [])
+
+    let sponsorship = (
+        tokenContract_,
+        tokenAsset.toBase58String(),
+        minSponsoredAssetFee_,
+        sponsoredWaves_,
+        thresholdWaves_,
+        beneficiaryAddress_
+    )
+
+    (
+        _saveSponsorship(sponsorship) ++ 
+        [
+            ScriptTransfer(tokenContract, wavesToCharge, unit)
+        ], unit
+    )
+}
+
+@Callable(i)
+func checkpointSponsorship(tokenContract_: String) = {
+    let tokenContract = addressFromString(tokenContract_).valueOrErrorMessage("checkpointSponsorship: invalid token contract")
+    let sponsorship = _loadSponsorship(tokenContract_)
+    let tokenAsset = sponsorship._2
+    let minSponsoredAssetFee = sponsorship._3
+    let sponsoredWaves = sponsorship._4
+    let thresholdWaves = sponsorship._5
+    let beneficiaryAddress = addressFromStringValue(sponsorship._6)
+    let wavesLeft = wavesBalance(tokenContract).regular
+
+    strict err =
+        if thresholdWaves < wavesLeft then
+            throw("checkpointSponsorship: no threshold has been reached")
+        else unit
+
+    strict invocation = invoke(tokenContract, FUNC_UPDATE_SPONSORSHIP, [minSponsoredAssetFee, sponsoredWaves], [])
+    match invocation {
+        case sponsorTokenToExchange:Int => 
+            strict wavesBefore = wavesBalance(this).regular
+            strict exchange = invoke(tokenContract, FUNC_WITHDRAW, [], [AttachedPayment(_toAssetVector(tokenAsset), sponsorTokenToExchange)])
+            strict wavesAfter = wavesBalance(this).regular
+            strict wavesRemaining = wavesBalance(tokenContract).regular
+
+            let wavesIncome = wavesAfter - wavesBefore
+
+            let wavesToCharge =
+                if wavesRemaining < sponsoredWaves then
+                    sponsoredWaves - wavesRemaining
+                else 0
+
+            let wavesToBeneficiary =
+                if wavesIncome > wavesToCharge then
+                    wavesIncome - wavesToCharge
+                else 0
+
+            let compensation =
+                if wavesToBeneficiary > COMPENSATION then
+                    COMPENSATION
+                else 0
+
+            (
+                [
+                    ScriptTransfer(tokenContract, wavesToCharge, unit),
+                    ScriptTransfer(beneficiaryAddress, wavesToBeneficiary - compensation, unit),
+                    ScriptTransfer(i.originCaller, compensation, unit)
+                ], unit
+            )
+        case _ => throw("checkpointSponsorship: invocation error")
+    }
+}
+
+@Callable(i)
+func setMultisig(multisig_: String) = {
+    strict err =
+        if i.caller != this then
+            throw("setMultisig: permission denied")
+        else if !_validateAddress(multisig_) then
+            throw("setMultisig: invalid multisig address")
+        else unit
+
+    (
+        [
+            StringEntry(KEY_MULTISIG, multisig_)
+        ], unit
+    )
+}
+
+@Verifier(tx)
+func verify() = {
+    match getString(KEY_MULTISIG) {
+        case multisig: String => 
+            multisig
+                .addressFromStringValue()
+                .getBoolean(makeString([KEY_STATUS, this.toString(), tx.id.toBase58String()], SEPARATOR))
+                .valueOrElse(false)
+        case _ => sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+    }
+}

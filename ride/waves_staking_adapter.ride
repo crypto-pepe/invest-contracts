@@ -1,0 +1,302 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let SEPARATOR = "__"
+let KEY_INIT = "INIT"
+let KEY_MULTISIG = "MULTISIG"
+let KEY_STATUS = "STATUS"
+let KEY_TARGET = "TARGET"
+let KEY_ADAPTEE = "ADAPTEE"
+let KEY_MANAGER = "MANAGER"
+let KEY_FEE_RATE = "FEE_RATE"
+let KEY_LAST_CLAIM = "LAST_CLAIM"
+let KEY_LEASE_ID = "LEASE_ID"
+let KEY_LEASE_AMOUNT = "LEASE_AMOUNT"
+
+let FUNC_CLAIM = "claim"
+
+let INVOKE_FEE = 500000
+let COMPENSATION = INVOKE_FEE
+let CLAIM_INTERVAL = 1440
+let PERCENT_FACTOR = 10000
+
+# ---------- Validation functions ----------
+
+func _validateAddress(address_: String) = {
+    match addressFromString(address_) {
+        case a:Address => true
+        case _ => false
+    }
+}
+
+# ---------- Data structures functions ----------
+
+func _loadTarget() = {
+    match getString(KEY_TARGET) {
+        case a:String => addressFromStringValue(a)
+        case _ => throw("_loadTarget: no target address")
+    }
+}
+
+func _loadAdaptee() = {
+    match getString(KEY_ADAPTEE) {
+        case a:String => addressFromStringValue(a)
+        case _ => throw("_loadAdaptee: no adaptee address")
+    }
+}
+
+func _loadManager() = {
+    match getString(KEY_MANAGER) {
+        case a:String => addressFromStringValue(a)
+        case _ => throw("_loadManager: no manager address")
+    }
+}
+
+func _loadFeeRate() = {
+    match getInteger(KEY_FEE_RATE) {
+        case a:Int => a
+        case _ => throw("_loadFeeRate: no fee rate")
+    }
+}
+
+func _loadLastClaim() = {
+    match getInteger(KEY_LAST_CLAIM) {
+        case a:Int => a
+        case _ => throw("_loadLastClaim: no last claim")
+    }
+}
+
+func _loadInt(key_: String, default_: Int) = {
+    match getInteger(key_) {
+        case a:Int => a
+        case _ => default_
+    }
+}
+
+# ---------- Leasing functions ----------
+
+func _updateLeasing(amount_: Int, leaseNode_: Address) = {
+    let leaseId = getBinary(KEY_LEASE_ID)
+    let leaseAmount = _loadInt(KEY_LEASE_AMOUNT, 0)
+    let newLeaseAmount = leaseAmount + amount_
+
+    let unleaseOrEmpty =
+        if leaseId.isDefined() then
+            [LeaseCancel(leaseId.value())]
+        else []
+
+    let leaseActions =
+        if newLeaseAmount > 0 then
+            let lease = Lease(leaseNode_, newLeaseAmount)
+            [
+                lease,
+                BinaryEntry(KEY_LEASE_ID, calculateLeaseId(lease)),
+                IntegerEntry(KEY_LEASE_AMOUNT, newLeaseAmount)
+            ]
+        else
+            [
+                DeleteEntry(KEY_LEASE_ID),
+                IntegerEntry(KEY_LEASE_AMOUNT, 0)
+            ]
+
+    unleaseOrEmpty ++ leaseActions
+}
+
+func _claimableReward() = {
+    let lastClaim = _loadLastClaim()
+    let leaseNode = _loadAdaptee()
+    let claimAmount = wavesBalance(leaseNode).regular
+
+    let feeRate = _loadFeeRate()
+    let fee = fraction(claimAmount, feeRate, PERCENT_FACTOR)
+    let rewardAmount = claimAmount - fee
+
+    if rewardAmount <= COMPENSATION then
+        # too few amount
+        (false, 0, 0, 0)
+    else if height < lastClaim + CLAIM_INTERVAL then
+        # too few interval
+        (false, 0, 0, 0)
+    else
+        strict invocation = invoke(leaseNode, FUNC_CLAIM, [claimAmount], [])
+        (true, rewardAmount - COMPENSATION, COMPENSATION, fee)
+}
+
+# ---------- Public callable functions ----------
+
+@Callable(i)
+func init(target_: String, adaptee_: String, manager_: String, feeRate_: Int) = {
+    strict multisig = getString(KEY_MULTISIG).valueOrErrorMessage("init: no multisig set")
+    let init = getBoolean(KEY_INIT).valueOrElse(false)
+
+    strict err =
+        if i.caller != this then
+            throw("init: permission denied")
+        else if init then
+            throw("init: already initialized")
+        else if !_validateAddress(target_) then
+            throw("init: invalid target address")
+        else if !_validateAddress(adaptee_) then
+            throw("init: invalid adaptee address")
+        else if !_validateAddress(manager_) then
+            throw("init: invalid manager address")
+        else if feeRate_ < 0 || feeRate_ > PERCENT_FACTOR then
+            throw("init: invalid fee rate")
+        else unit
+
+    (
+        [
+            BooleanEntry(KEY_INIT, true),
+            StringEntry(KEY_TARGET, target_),
+            StringEntry(KEY_ADAPTEE, adaptee_),
+            StringEntry(KEY_MANAGER, manager_),
+            IntegerEntry(KEY_FEE_RATE, feeRate_),
+            IntegerEntry(KEY_LAST_CLAIM, height)
+        ], unit
+    )
+}
+
+@Callable(i)
+func stake() = {
+    strict err =
+        if i.caller != _loadTarget() then
+            throw("stake: permission denied")
+        else if i.payments.size() != 1 then
+            throw("stake: no payments")
+        else if i.payments[0].assetId != unit then
+            throw("stake: payment is not in waves")
+        else if i.payments[0].amount <= 0 then
+            throw("stake: invalid payment amount")
+        else unit
+
+    (
+        _updateLeasing(i.payments[0].amount, _loadAdaptee()), unit
+    )
+}
+
+@Callable(i)
+func unstake(amount_: Int) = {
+    strict err =
+        if i.caller != _loadTarget() then
+            throw("unstake: permission denied")
+        else if amount_ <= 0 then
+            throw("unstake: invalid amount")
+        else unit
+
+    (
+        _updateLeasing(-1 * amount_, _loadAdaptee()) 
+            :+ ScriptTransfer(i.caller, amount_, unit), unit
+    )
+}
+
+@Callable(i)
+func claimReward() = {
+    let reward = _claimableReward()
+
+    if i.caller != _loadTarget() then
+        throw("claimReward: permission denied")
+    else if !reward._1 then
+        # claim is not allowed, but not to throw
+        ([], unit)
+    else
+        (
+            [
+                ScriptTransfer(i.caller, reward._2 + reward._3, unit),
+                ScriptTransfer(_loadManager(), reward._4, unit),
+                IntegerEntry(KEY_LAST_CLAIM, height)
+            ], (reward._2, reward._3, CLAIM_INTERVAL)
+        )
+}
+
+@Callable(i)
+func setMultisig(multisig_: String) = {
+    strict err =
+        if i.caller != this then
+            throw("setMultisig: permission denied")
+        else if !_validateAddress(multisig_) then
+            throw("setMultisig: invalid multisig address")
+        else unit
+
+    (
+        [
+            StringEntry(KEY_MULTISIG, multisig_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func setTarget(target_: String) = {
+    strict err =
+        if i.caller != this then
+            throw("setTarget: permission denied")
+        else if !_validateAddress(target_) then
+            throw("setTarget: invalid target address")
+        else unit
+
+    (
+        [
+            StringEntry(KEY_TARGET, target_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func setAdaptee(adaptee_: String) = {
+    strict err =
+        if i.caller != this then
+            throw("setAdaptee: permission denied")
+        else if !_validateAddress(adaptee_) then
+            throw("setAdaptee: invalid target address")
+        else unit
+
+    (
+        [
+            StringEntry(KEY_ADAPTEE, adaptee_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func setManager(manager_: String) = {
+    strict err =
+        if i.caller != this then
+            throw("setManager: permission denied")
+        else if !_validateAddress(manager_) then
+            throw("setManager: invalid target address")
+        else unit
+
+    (
+        [
+            StringEntry(KEY_MANAGER, manager_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func setFeeRate(feeRate_: Int) = {
+    strict err =
+        if i.caller != this then
+            throw("setFeeRate: permission denied")
+        else if feeRate_ < 0 || feeRate_ > PERCENT_FACTOR then
+            throw("setFeeRate: invalid infrastructure fee")
+        else unit
+
+    (
+        [
+            IntegerEntry(KEY_FEE_RATE, feeRate_)
+        ], unit
+    )
+}
+
+@Verifier(tx)
+func verify() = {
+    match getString(KEY_MULTISIG) {
+        case multisig: String => 
+            multisig
+                .addressFromStringValue()
+                .getBoolean(makeString([KEY_STATUS, this.toString(), tx.id.toBase58String()], SEPARATOR))
+                .valueOrElse(false)
+        case _ => sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+    }
+}

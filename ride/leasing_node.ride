@@ -1,0 +1,96 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let SEPARATOR = "__"
+let KEY_INIT = "INIT"
+let KEY_MULTISIG = "MULTISIG"
+let KEY_STATUS = "STATUS"
+let KEY_CLAIMER = "CLAIMER"
+
+# ---------- Validation functions ----------
+
+func _validateAddress(address_: String) = {
+    match addressFromString(address_) {
+        case a:Address => true
+        case _ => false
+    }
+}
+
+# ---------- Public callable functions ----------
+
+@Callable(i)
+func init(claimer_: String) = {
+    strict multisig = getString(KEY_MULTISIG).valueOrErrorMessage("init: no multisig set")
+    let init = getBoolean(KEY_INIT).valueOrElse(false)
+
+    strict err =
+        if i.caller != this then
+            throw("init: permission denied")
+        else if init then
+            throw("init: already initialized")
+        else if !_validateAddress(claimer_) then
+            throw("init: invalid claimer address")
+        else unit
+
+    (
+        [
+            BooleanEntry(KEY_INIT, true),
+            StringEntry(KEY_CLAIMER, claimer_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func setMultisig(multisig_: String) = {
+    strict err =
+        if i.caller != this then
+            throw("setMultisig: permission denied")
+        else if !_validateAddress(multisig_) then
+            throw("setMultisig: invalid multisig address")
+        else unit
+
+    (
+        [
+            StringEntry(KEY_MULTISIG, multisig_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func setClaimer(claimer_: String) = {
+    strict err =
+        if i.caller != this then
+            throw("setClaimer: permission denied")
+        else if !_validateAddress(claimer_) then
+            throw("setClaimer: invalid claimer address")
+        else unit
+
+    (
+        [
+            StringEntry(KEY_CLAIMER, claimer_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func claim(amount_: Int) = {
+    if i.caller != getStringValue(KEY_CLAIMER).addressFromStringValue() then
+        throw("claim: permission denied")
+    else if amount_ <= 0 || amount_ > wavesBalance(this).regular then
+        throw("claim: invalid amount")
+    else
+        ([ScriptTransfer(i.caller, amount_, unit)], unit)
+}
+
+@Verifier(tx)
+func verify() = {
+    match getString(KEY_MULTISIG) {
+        case multisig: String => 
+            multisig
+                .addressFromStringValue()
+                .getBoolean(makeString([KEY_STATUS, this.toString(), tx.id.toBase58String()], SEPARATOR))
+                .valueOrElse(false)
+        case _ => sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+    }
+}

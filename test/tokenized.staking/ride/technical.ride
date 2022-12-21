@@ -1,0 +1,124 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let SEPARATOR = "__"
+let REWARD_COMPENSATION = 500000
+let CLAIM_INTERVAL = 1440
+
+
+@Callable(i)
+func bigintToBinary(a_: Int) = {
+    let _a = a_.toBigInt()
+    (
+        [
+            BinaryEntry("BINARY_INT", _a.toBytes())
+        ], unit
+    )
+}
+
+@Callable(i)
+func setMultisigParams(
+    address_: String,
+    txid_: String,
+    isValid_: Boolean
+) = {
+    (
+        [
+            BooleanEntry("STATUS__" + address_ + SEPARATOR + txid_, isValid_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func setClaim(
+    caller_: Boolean,
+    reward_: Int,
+    compensation_: Int,
+    fee_: Int,
+    admin_: String
+) = {
+    (
+        [
+            BooleanEntry("CLAIM_CALLER", caller_),
+            IntegerEntry("CLAIM_REWARD", reward_),
+            IntegerEntry("REWARD_COMPENSATION", compensation_),
+            IntegerEntry("REWARD_FEE", fee_),
+            StringEntry("ADMIN_ADDRESS", admin_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func claimReward() = {
+    strict reward = getIntegerValue("CLAIM_REWARD")
+    strict compensation = getIntegerValue("REWARD_COMPENSATION")
+    if reward == 0 then
+        # claim is not allowed, but not to throw
+        ([], unit)
+    else
+        (
+            [
+                ScriptTransfer(i.caller, reward + compensation, unit),
+                ScriptTransfer(addressFromStringValue(getStringValue("ADMIN_ADDRESS")), getIntegerValue("REWARD_FEE"), unit)
+            ], (reward, compensation, CLAIM_INTERVAL)
+        )
+}
+
+@Callable(i)
+func setStake(caller_: Boolean) = {
+    (
+        [
+            BooleanEntry("STAKE_CALLER", caller_)
+        ], unit
+    )
+}
+
+@Callable(i)
+func stake() = {
+    strict err =
+        if getBooleanValue("STAKE_CALLER") == false then
+            throw("stake: permission denied")
+        else if i.payments.size() != 1 then
+            throw("stake: no payments")
+        else if i.payments[0].assetId != unit then
+            throw("stake: payment is not in waves")
+        else if i.payments[0].amount <= 0 then
+            throw("stake: invalid payment amount")
+        else unit
+    
+    ([], unit)
+}
+
+@Callable(i)
+func unstake(amount_: Int) = {
+    strict err =
+        if getBooleanValue("STAKE_CALLER") == false then
+            throw("unstake: permission denied")
+        else if amount_ <= 0 then
+            throw("unstake: invalid amount")
+        else unit
+
+    (
+        [ScriptTransfer(i.caller, amount_, unit)], unit
+    )
+}
+
+@Callable(i)
+func setTestAsset(
+    name_: String,
+    description_: String
+) = {
+    let issue = Issue(name_, description_, 0, 8, true)
+    let assetId = calculateAssetId(issue)
+
+    ([
+        StringEntry("ASSET", toBase58String(assetId)),
+        issue
+    ], unit)
+}
+
+@Verifier(tx)
+func verify() = {
+    sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+}

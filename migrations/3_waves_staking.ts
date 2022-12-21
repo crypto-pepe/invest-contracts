@@ -1,40 +1,75 @@
 import path = require('path');
-import { deployScript, ProofsGenerator } from '../utils/script';
-import { data, invoke, transfer } from '../utils/transaction';
 import {
-  WavesInvokeFee,
-  WavesNetwork,
-  WavesNetworkMainnet,
-  WavesSetScriptFee,
-} from '../utils/network';
+  NetworkConfig,
+  deployScript,
+  ProofsGenerator,
+  invoke,
+  transfer,
+} from '@pepe-team/waves-sc-test-utils';
 import { address, seedWithNonce, keyPair } from '@waves/ts-lib-crypto';
-import { lease } from '@waves/waves-transactions';
 
 export default async function (
   deployerSeed: string,
   appliedNonce: number,
-  network: WavesNetwork,
+  network: NetworkConfig,
   proofsGenerator: ProofsGenerator
 ) {
+  const feeRate = 250;
+  const tokenName = 'sWAVES';
+  const tokenDescription =
+    'sWAVES is the tokenized form of staked WAVES powered by PepeTeam. See details at https://swaves.pepe.team';
+
   const deployerPrivateKey = keyPair(deployerSeed).privateKey;
-  const deployerAddress = address(
-    {
-      publicKey: keyPair(deployerSeed).publicKey,
-    },
-    network.chaidID
-  );
-  const contract = keyPair(seedWithNonce(deployerSeed, appliedNonce + 1));
-  const contractAddress = address(
-    { publicKey: contract.publicKey },
-    network.chaidID
-  );
+  const deployerAddress = address(deployerSeed, network.chainID);
 
-  const multisigPublicKey = keyPair(seedWithNonce(deployerSeed, 1)).publicKey;
+  let leaseNodeContractAddress = '';
+  switch (network.name) {
+    case 'mainnet':
+      leaseNodeContractAddress = '3PDETXtiaErZncMduS8h9G6aopcjT7wheqj';
+      break;
+    case 'testnet':
+      leaseNodeContractAddress = '3MwgDbpnUQcr7MiFVQ1NcNgTBvkRytdGd2R';
+      break;
+    case 'custom':
+      leaseNodeContractAddress = deployerAddress;
+      break;
+    default:
+      throw 'Unknown network';
+  }
+  console.log('Lease node contract address =', leaseNodeContractAddress);
 
+  const multisigAddress = address(
+    { publicKey: keyPair(seedWithNonce(deployerSeed, 2)).publicKey },
+    network.chainID
+  );
+  console.log('Multisig contract address =', multisigAddress);
+
+  const adapterContract = keyPair(
+    seedWithNonce(deployerSeed, appliedNonce + 1)
+  );
+  const adapterContractAddress = address(
+    { publicKey: adapterContract.publicKey },
+    network.chainID
+  );
+  console.log('Waves adapter contract address =', adapterContractAddress);
+
+  const stakingContract = keyPair(
+    seedWithNonce(deployerSeed, appliedNonce + 2)
+  );
+  const stakingContractAddress = address(
+    { publicKey: stakingContract.publicKey },
+    network.chainID
+  );
+  console.log('Waves staking contract address =', stakingContractAddress);
+
+  // IMPORTANT
+  // throw 'wait for leasing_node.ride contract to be ready';
+
+  // Deploy adapterContract
   await transfer(
     {
-      amount: WavesSetScriptFee + WavesInvokeFee + 100000000,
-      recipient: contractAddress,
+      amount: network.setScriptFee + 2 * network.invokeFee,
+      recipient: adapterContractAddress,
     },
     deployerPrivateKey,
     network,
@@ -43,74 +78,141 @@ export default async function (
     throw e;
   });
 
-  // await data(
-  //   {
-  //     data: [{ key: 'MULTISIG', type: 'string', value: multisigPublicKey }],
-  //   },
-  //   contract.privateKey,
-  //   network,
-  //   proofsGenerator
-  // ).catch((e) => {
-  //   throw e;
-  // });
-
   await deployScript(
-    path.resolve(process.cwd(), './ride/waves_staking.ride'),
-    contract.privateKey,
+    path.resolve(process.cwd(), './ride/waves_staking_adapter.ride'),
+    adapterContract.privateKey,
     network,
     proofsGenerator
   ).catch((e) => {
     throw e;
   });
 
-  let leaseNodeAddress = '';
-  switch (network) {
-    case WavesNetworkMainnet:
-      leaseNodeAddress = 'TODO: set lease address';
-      break;
-    default:
-      leaseNodeAddress = deployerAddress;
-  }
+  await invoke(
+    {
+      dApp: adapterContractAddress,
+      call: {
+        function: 'setMultisig',
+        args: [
+          {
+            type: 'string',
+            value: multisigAddress,
+          },
+        ],
+      },
+    },
+    adapterContract.privateKey,
+    network,
+    proofsGenerator
+  ).catch((e) => {
+    throw e;
+  });
 
   await invoke(
     {
-      dApp: contractAddress,
+      dApp: adapterContractAddress,
       call: {
         function: 'init',
         args: [
           {
             type: 'string',
-            value: multisigPublicKey,
+            value: stakingContractAddress, // target_
           },
           {
             type: 'string',
-            value: leaseNodeAddress,
+            value: leaseNodeContractAddress, // adaptee_
+          },
+          {
+            type: 'string',
+            value: multisigAddress, // manager_
+          },
+          {
+            type: 'integer',
+            value: feeRate, // feeRate_
           },
         ],
       },
-      fee: 100500000,
+    },
+    adapterContract.privateKey,
+    network,
+    proofsGenerator
+  ).catch((e) => {
+    throw e;
+  });
+
+  // Deploy stakingContract
+  await transfer(
+    {
+      amount: network.setScriptFee + 2 * network.invokeFee + 200000000,
+      recipient: stakingContractAddress,
     },
     deployerPrivateKey,
     network,
-    undefined
+    proofsGenerator
+  ).catch((e) => {
+    throw e;
+  });
+
+  await deployScript(
+    path.resolve(process.cwd(), './ride/tokenized_staking.ride'),
+    stakingContract.privateKey,
+    network,
+    proofsGenerator
   ).catch((e) => {
     throw e;
   });
 
   await invoke(
     {
-      dApp: contractAddress,
+      dApp: stakingContractAddress,
       call: {
-        function: 'deposit',
+        function: 'setMultisig',
+        args: [
+          {
+            type: 'string',
+            value: multisigAddress,
+          },
+        ],
       },
-      payment: [{ assetId: null, amount: 100000000 }],
     },
-    deployerPrivateKey,
+    stakingContract.privateKey,
     network,
-    undefined
+    proofsGenerator
   ).catch((e) => {
     throw e;
   });
 
-  return appliedNonce + 1;
+  await invoke(
+    {
+      dApp: stakingContractAddress,
+      call: {
+        function: 'init',
+        args: [
+          {
+            type: 'string',
+            value: tokenName, // tokenName_
+          },
+          {
+            type: 'string',
+            value: tokenDescription, // tokenDescr_
+          },
+          {
+            type: 'string',
+            value: 'WAVES', // baseAsset_
+          },
+          {
+            type: 'string',
+            value: adapterContractAddress, // stakingAdapter_
+          },
+        ],
+      },
+      fee: 100500000,
+    },
+    stakingContract.privateKey,
+    network,
+    proofsGenerator
+  ).catch((e) => {
+    throw e;
+  });
+
+  return appliedNonce + 2;
 }

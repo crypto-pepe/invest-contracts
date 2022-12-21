@@ -3,12 +3,8 @@ import { WavesLedger } from '@waves/ledger';
 import TransportNodeHid from '@ledgerhq/hw-transport-node-hid-singleton';
 import { base58Decode } from '@waves/ts-lib-crypto';
 import { protoSerialize } from '@waves/waves-transactions';
-import {
-  WavesNetworkCustom,
-  WavesNetworkMainnet,
-  WavesNetworkTestnet,
-} from '../utils/network';
 import { exit } from 'process';
+import { getEnvironmentByName } from 'relax-env-json';
 
 (async () => {
   console.log('Plug-in your ledger device and enter to WAVES application\n');
@@ -34,17 +30,7 @@ import { exit } from 'process';
     ])
     .then((answers) => {
       txToSign = answers.txToSign;
-      switch (answers.network) {
-        case 'mainnet':
-          networkByte = WavesNetworkMainnet.chaidID.charCodeAt(0);
-          break;
-        case 'testnet':
-          networkByte = WavesNetworkTestnet.chaidID.charCodeAt(0);
-          break;
-        case 'custom':
-          networkByte = WavesNetworkCustom.chaidID.charCodeAt(0);
-          break;
-      }
+      networkByte = getEnvironmentByName(answers.network).network;
     })
     .catch((e) => {
       throw JSON.stringify(e);

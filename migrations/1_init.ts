@@ -1,29 +1,29 @@
-import { deployScript, ProofsGenerator } from '../utils/script';
-import { data, transfer } from '../utils/transaction';
-import path = require('path');
 import {
-  WavesNetwork,
-  WavesSetScriptFee,
-  WavesInvokeFee,
-} from '../utils/network';
+  NetworkConfig,
+  deployScript,
+  ProofsGenerator,
+  data,
+  transfer,
+} from '@pepe-team/waves-sc-test-utils';
+import path = require('path');
 import { address, seedWithNonce, keyPair } from '@waves/ts-lib-crypto';
 
 export default async function (
   deployerSeed: string,
   appliedNonce: number,
-  network: WavesNetwork,
+  network: NetworkConfig,
   proofsGenerator: ProofsGenerator
 ) {
   const deployerPrivateKey = keyPair(deployerSeed).privateKey;
   const contract = keyPair(seedWithNonce(deployerSeed, appliedNonce + 1));
   const contractAddress = address(
     { publicKey: contract.publicKey },
-    network.chaidID
+    network.chainID
   );
 
   await transfer(
     {
-      amount: WavesSetScriptFee + WavesInvokeFee,
+      amount: network.setScriptFee + network.invokeFee,
       recipient: contractAddress,
     },
     deployerPrivateKey,
@@ -49,7 +49,7 @@ export default async function (
         {
           key: 'OWNER',
           type: 'string',
-          value: address(deployerSeed, network.chaidID),
+          value: address(deployerSeed, network.chainID),
         },
       ],
     },
